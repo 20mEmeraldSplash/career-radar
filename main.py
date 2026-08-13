@@ -18,7 +18,9 @@ from google import (
     collect_google_jobs,
 )
 from greenhouse import (
+    LOCATIONS as GREENHOUSE_LOCATIONS,
     LOOKBACK_HOURS as GREENHOUSE_LOOKBACK_HOURS,
+    MAX_YEARS as GREENHOUSE_MAX_YEARS,
     MIN_EMPLOYEES,
     Job as GreenhouseJob,
     collect_greenhouse_jobs,
@@ -69,7 +71,8 @@ def save_results(jobs: list[dict[str, Any]], generated_at: datetime) -> None:
             "greenhouse": {
                 "min_employees": MIN_EMPLOYEES,
                 "lookback_hours": GREENHOUSE_LOOKBACK_HOURS,
-                "locations": ["USA remote", "California", "New York"],
+                "max_years": GREENHOUSE_MAX_YEARS,
+                "locations": list(GREENHOUSE_LOCATIONS),
             },
         },
         "counts": {
@@ -124,7 +127,10 @@ def save_results(jobs: list[dict[str, Any]], generated_at: datetime) -> None:
   <p>Generated at {html.escape(generated_at.isoformat())}.</p>
   <p>
     Google: top {GOOGLE_TOP_N} {html.escape(GOOGLE_QUERY)} roles.
-    Greenhouse: software roles in USA remote / CA / NY from the past {GREENHOUSE_LOOKBACK_HOURS} hours.
+    Greenhouse: Software Engineer / Senior Software Engineer in
+    {html.escape(" / ".join(GREENHOUSE_LOCATIONS))} from the past
+    {GREENHOUSE_LOOKBACK_HOURS} hours
+    (years of experience &lt;= {GREENHOUSE_MAX_YEARS} when mentioned).
   </p>
   {cards}
 </body>

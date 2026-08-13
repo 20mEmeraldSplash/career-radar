@@ -23,6 +23,6 @@ python main.py
 
 - `greenhouse.py`: Greenhouse 公开 Job Board API
 - 也可单独跑：`python greenhouse.py`（会写到 `greenhouse_jobs.*`）
-- 筛选：估计人数 `> 200`、明确的软件工程标题、过去 48 小时、地点为 USA remote / 加州 / 纽约州
+- 筛选：估计人数 `> 200`、标题为 Software Engineer / Senior Software Engineer、过去 24 小时、地点为 US Remote / San Diego；若 JD 提到 years of experience，则不可超过 5 年
 - 时间字段区分 `first_published` / `updated_at`（`published_at` + `date_source`）
-- 可调：`COMPANIES`、`MIN_EMPLOYEES`、`LOOKBACK_HOURS`
+- 可调：`COMPANIES`、`MIN_EMPLOYEES`、`LOOKBACK_HOURS`、`MAX_YEARS`、`LOCATIONS`
