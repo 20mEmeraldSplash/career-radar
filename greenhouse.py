@@ -16,22 +16,35 @@ OUTPUT_DIR = Path("output")
 API_BASE = "https://boards-api.greenhouse.io/v1/boards"
 MIN_EMPLOYEES = 200
 LOOKBACK_HOURS = 48
+# Reject roles that mention more than this many years of experience.
+MAX_YEARS = 5
 REQUEST_TIMEOUT_SECONDS = 30
 MAX_WORKERS = 12
 
+LOCATIONS = (
+    "Remote (US)",
+    "San Diego",
+)
+
+# Match Software Engineer / Senior Software Engineer (allow trailing specialty text).
 SOFTWARE_TITLE_RE = re.compile(
+    r"\b(?:senior\s+)?software\s+engineer\b",
+    re.IGNORECASE,
+)
+# Keep titles focused on SWE / Senior SWE only.
+EXCLUDED_TITLE_RE = re.compile(
     r"\b("
-    r"software\s+(engineer|developer)"
-    r"|frontend\s+(engineer|developer)"
-    r"|front-end\s+(engineer|developer)"
-    r"|backend\s+(engineer|developer)"
-    r"|back-end\s+(engineer|developer)"
-    r"|full[- ]stack\s+(engineer|developer)"
-    r"|web\s+(engineer|developer)"
-    r"|swe"
+    r"staff|principal|lead|distinguished|fellow|"
+    r"manager|director|intern|architect|head|vp|"
+    r"engineering\s+manager"
     r")\b",
     re.IGNORECASE,
 )
+YEARS_OF_EXPERIENCE_RE = re.compile(
+    r"(\d+)\s*\+?\s*years?\s+(?:of\s+)?(?:experience|exp\.?)",
+    re.IGNORECASE,
+)
+HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 @dataclass(frozen=True)
@@ -120,11 +133,12 @@ def is_within_lookback(posted_at: datetime, now: datetime) -> bool:
 
 
 def is_software_role(title: str) -> bool:
+    if EXCLUDED_TITLE_RE.search(title):
+        return False
     return bool(SOFTWARE_TITLE_RE.search(title))
 
 
-CA_LOCATION_RE = re.compile(r"\b(CA|California)\b", re.IGNORECASE)
-NY_LOCATION_RE = re.compile(r"\b(NY|New York)\b", re.IGNORECASE)
+SAN_DIEGO_LOCATION_RE = re.compile(r"\bSan\s+Diego\b", re.IGNORECASE)
 US_REMOTE_MARKER_RE = re.compile(
     r"("
     r"\busa\b|\bu\.s\.?\b|\bunited states\b|"
@@ -136,23 +150,39 @@ US_REMOTE_MARKER_RE = re.compile(
 
 
 def is_allowed_location(location: str) -> bool:
-    """USA remote, California, or New York state."""
+    """US remote, or San Diego."""
     text = (location or "").strip()
     if not text:
         return False
 
-    if CA_LOCATION_RE.search(text) or NY_LOCATION_RE.search(text):
+    if SAN_DIEGO_LOCATION_RE.search(text):
         return True
 
-    # Require an explicit US marker for remote roles (conservative).
+    # Require an explicit US marker for remote roles.
     if "remote" not in text.lower():
         return False
 
     return bool(US_REMOTE_MARKER_RE.search(text))
 
 
+def strip_html(text: str) -> str:
+    return HTML_TAG_RE.sub(" ", html.unescape(text))
+
+
+def experience_years_mentioned(text: str) -> list[int]:
+    return [int(value) for value in YEARS_OF_EXPERIENCE_RE.findall(text)]
+
+
+def meets_experience_cap(content: str, max_years: int = MAX_YEARS) -> bool:
+    """Keep jobs with no years mentioned, or all mentioned years <= max_years."""
+    years = experience_years_mentioned(strip_html(content))
+    if not years:
+        return True
+    return all(year <= max_years for year in years)
+
+
 def fetch_board_jobs(board_token: str) -> list[dict[str, Any]]:
-    url = f"{API_BASE}/{board_token}/jobs"
+    url = f"{API_BASE}/{board_token}/jobs?content=true"
     request = Request(
         url,
         headers={
@@ -176,6 +206,10 @@ def normalize_job(raw: dict[str, Any], company: Company) -> Job | None:
     if isinstance(location_obj, dict):
         location = str(location_obj.get("name") or "").strip()
     if not is_allowed_location(location):
+        return None
+
+    content = str(raw.get("content") or "")
+    if not meets_experience_cap(content):
         return None
 
     first_published = raw.get("first_published")
@@ -257,8 +291,9 @@ def collect_greenhouse_jobs(
         f"  Companies (estimated_employees > {MIN_EMPLOYEES}): {len(companies)}"
     )
     print(
-        "  Filters: software title, past "
-        f"{LOOKBACK_HOURS} hours, location in USA remote / CA / NY"
+        "  Filters: Software Engineer / Senior Software Engineer, past "
+        f"{LOOKBACK_HOURS} hours, location in {' / '.join(LOCATIONS)}, "
+        f"years of experience <= {MAX_YEARS} when mentioned"
     )
 
     jobs: list[Job] = []
@@ -293,7 +328,8 @@ def save_results(jobs: list[Job], generated_at: datetime) -> None:
         "source": "greenhouse",
         "min_employees": MIN_EMPLOYEES,
         "lookback_hours": LOOKBACK_HOURS,
-        "locations": ["USA remote", "California", "New York"],
+        "max_years": MAX_YEARS,
+        "locations": list(LOCATIONS),
         "title_filter": SOFTWARE_TITLE_RE.pattern,
         "companies_scanned": [
             asdict(company) for company in eligible_companies()
@@ -343,9 +379,11 @@ def save_results(jobs: list[Job], generated_at: datetime) -> None:
   <h1>Career Radar — Greenhouse</h1>
   <p>Generated at {html.escape(generated_at.isoformat())}.</p>
   <p>
-    Software roles from the past {LOOKBACK_HOURS} hours
-    at Greenhouse companies with more than {MIN_EMPLOYEES} estimated employees.
-    Locations: USA remote, California, or New York.
+    Software Engineer / Senior Software Engineer roles from the past
+    {LOOKBACK_HOURS} hours at Greenhouse companies with more than
+    {MIN_EMPLOYEES} estimated employees.
+    Locations: {html.escape(", ".join(LOCATIONS))}.
+    Experience: keep if unmentioned or all mentioned years &lt;= {MAX_YEARS}.
   </p>
   {cards}
 </body>
@@ -364,8 +402,9 @@ def main() -> None:
 
     print("\n" + "=" * 72)
     print(
-        f"Found {len(jobs)} Greenhouse software jobs "
-        f"(USA remote / CA / NY, past {LOOKBACK_HOURS}h, "
+        f"Found {len(jobs)} Greenhouse SWE jobs "
+        f"({' / '.join(LOCATIONS)}, past {LOOKBACK_HOURS}h, "
+        f"years <= {MAX_YEARS} when mentioned, "
         f"estimated_employees > {MIN_EMPLOYEES})."
     )
     for job in jobs:
